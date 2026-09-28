@@ -151,6 +151,30 @@ l’image d’origine. Les 4 coins et le fond sont **identiques**, les différen
 zone des logos (`x 371..1554, y 427..651` sur 1920 × 1080) et le tramage 1 px du fond est intact
 (198 transitions sur 200 px) : aucune trace de sous-échantillonnage.
 
+### Un piège qui]n’a été visible que dans l’aperçu
+
+Changer la couleur ne changeait **rien à l’écran** : le fichier exporté était bien de la bonne
+couleur, mais le canvas affichait encore l’ancienne. La cause : `dispose()` sur un objet Fabric le
+libère sans le détacher du canvas. L’ancien rectangle restait donc peint **par-dessus** son
+remplacement (l’objet est envoyé à l’arrière-plan, ce qui fait remonter l’ancien au premier plan), et
+un redraw forcé — zoom, redimensionnement de fenêtre — ne le retirait pas.
+
+Le correctif est un `dropObject()` qui fait `canvas.remove(obj)` **puis** `obj.dispose()`, utilisé
+pour le fond, la grille et les repères de centre. Les logos, eux, faisaient déjà l’opération dans
+le bon ordre.
+
+Ce bug avait passé les tests parce que la section « fond uni » ne vérifiait que **les octets du
+fichier exporté**, jamais le canvas affiché. Les tests mesurent désormais les deux :
+
+| Vérification | Ancien code | Code corrigé |
+| --- | --- | --- |
+| l’aperçu suit la couleur choisie | **échec** — pixel `[0, 0, 0]` | pixel conforme |
+| remplacer l’image de fond | — | plaque reconstruite |
+| repères de centre masqués | — | **0** pixel résiduel |
+
+Les tests ont été exécutés avec l’ancien code pour confirmer qu’ils détectent bien la
+régression (`2 TESTS EN ECHEC`), puis avec le nouveau code.
+
 ## Choix techniques notables
 
 - **Coordonnées en pixels de l’image.** Le zoom Fabric ne modifie que le viewport ; la géométrie
@@ -162,6 +186,9 @@ zone des logos (`x 371..1554, y 427..651` sur 1920 × 1080) et le tramage 1 px d
 - Dans le canvas Fabric, le fond est un objet inerte envoyé à l’arrière-plan : une `FabricImage`
   pour une image, un `fabric.Rect` rempli pour une couleur. Les logos se posent donc exactement de
   la même façon dans les deux cas.
+- **Rebuilder un objet, c’est le détacher avant de le libérer.** `dropObject()` encapsule
+  `canvas.remove()` + `dispose()` : c’est la seule différence entre un fond qui se remplace et un
+  fond qui s’empile. La section 22 des tests mesure l’aperçu, pas seulement le fichier.
 - `strokeWidth: 0` sur les objets Fabric : la valeur par défaut `1` fausserait les dimensions.
 - **Export indépendant du canvas de prévisualisation.** Voir la section précédente : c’est la
   garantie centrale de la qualité d’export.

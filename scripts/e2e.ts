@@ -79,6 +79,23 @@ async function upload(page: Page, inputIndex: number, files: string[]) {
  * picker: the frame picker only accepts raster formats, and in colour mode there
  * is no frame picker at all, so an index would depend on the background mode.
  */
+/**
+ * Uploads into the first file input that does NOT accept SVG, which identifies
+ * the frame picker: the logo picker always accepts SVG. The frame picker is
+ * absent in colour mode, so an index would depend on the background mode.
+ */
+async function uploadFrame(page: Page, files: string[]) {
+  const handles = await fileInputs(page)
+  for (const handle of handles) {
+    const accept = await handle.evaluate((el) => (el as HTMLInputElement).accept)
+    if (!accept.includes('svg')) {
+      await handle.uploadFile(...files)
+      return
+    }
+  }
+  throw new Error('Input de fond (image) introuvable')
+}
+
 async function uploadLogos(page: Page, files: string[]) {
   const handles = await fileInputs(page)
   for (const handle of handles) {
@@ -105,6 +122,19 @@ function snippetClickText(needles: string[], exact = false): string {
         }
       }
       return null;
+    })()
+  `
+}
+
+/** Click the first button carrying this exact aria-label (swatches, toolbar tools). */
+function snippetClickLabel(label: string): string {
+  return `
+    (function () {
+      var buttons = Array.prototype.slice.call(document.querySelectorAll('button'));
+      for (var i = 0; i < buttons.length; i++) {
+        if (buttons[i].getAttribute('aria-label') === ${JSON.stringify(label)}) { buttons[i].click(); return true; }
+      }
+      return false;
     })()
   `
 }
@@ -1401,6 +1431,59 @@ async function main() {
     `)
     check('le préréglage « Gris » est cliquable', pickedGrey === true)
     await new Promise((resolve) => setTimeout(resolve, 500))
+    // The plate must repaint on SCREEN too. Rebuilding the plate used to leave
+    // the previous object on the canvas: the export was correct while the
+    // preview kept the old colour, and only the exported file was being
+    // checked, so the bug slipped through.
+    const preview = (await page4.evaluate(`
+      (function () {
+        var el = document.querySelector('canvas.lower-canvas');
+        if (!el) return null;
+        var d = el.getContext('2d').getImageData(4, 4, 1, 1).data;
+        return [d[0], d[1], d[2]];
+      })()
+    `)) as number[] | null
+    check(
+      'le fond change aussi dans l’APERÇU à l’écran (pas seulement dans le fichier)',
+      preview !== null &&
+        Math.abs(preview[0] - 0x9c) <= 2 &&
+        Math.abs(preview[1] - 0xa3) <= 2 &&
+        Math.abs(preview[2] - 0xaf) <= 2,
+      `-> pixel aperçu ${JSON.stringify(preview)}`,
+    )
+    // Same trap for the guides: rebuilding them used to leave the previous
+    // lines on the canvas, so switching them off did not clean the screen.
+    // Detection is relative (pink is always redder and bluer than green), so it
+    // works on a black plate as well as on a light one.
+    const countPink = () =>
+      page4.evaluate(`
+        (function () {
+          var el = document.querySelector('canvas.lower-canvas');
+          var d = el.getContext('2d').getImageData(0, 0, el.width, el.height).data;
+          var n = 0;
+          for (var i = 0; i < d.length; i += 4) {
+            var r = d[i], g = d[i + 1], b = d[i + 2];
+            if (r - g > 25 && b - g > 15 && r > 25) n++;
+          }
+          return n;
+        })()
+      `) as Promise<number>
+    const toggleGuides = async () => {
+      await page4.evaluate(snippetClickLabel('Centres'))
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      return countPink()
+    }
+    // Start from a known state: the guides are on by default, so normalise.
+    if ((await countPink()) > 100) await toggleGuides()
+    check('les repères de centre peuvent être masqués', (await countPink()) === 0)
+    const guidesOn = await toggleGuides()
+    check('les repères de centre s’affichent quand on les active', guidesOn > 100, `-> ${guidesOn} px`)
+    const guidesOff = await toggleGuides()
+    check(
+      'les repères disparaissent vraiment quand on les désactive (pas de lignes fantômes)',
+      guidesOff === 0,
+      `-> ${guidesOff} px résiduels`,
+    )
     const grey = (await exportOnce(page4, downloadDir, analyseCorners)) as CornerAnalysis & {
       savedTo?: string
     }
@@ -1445,7 +1528,59 @@ async function main() {
     await page4.close()
 
     /* ---------------------------------------------------------------- */
-    console.log('\n[22] Aucune erreur JavaScript')
+    console.log('\n[22] Remplacer le fond ne laisse pas l’ancien derrière')
+    // Rebuilding the plate disposes the previous object. If it is not detached
+    // from the canvas first, it stays painted on top of its replacement: the
+    // screen would keep showing the old background while the exported file was
+    // correct. Both directions are measured on the visible canvas.
+    const page5 = await browser.newPage()
+    await page5.setViewport({ width: 1600, height: 1000, deviceScaleFactor: 1 })
+    await page5.goto(URL, { waitUntil: 'networkidle0' })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    await upload(page5, 0, [fixtures.frame])
+    await page5.waitForSelector('canvas.upper-canvas', { timeout: 20000 })
+    await new Promise((resolve) => setTimeout(resolve, 800))
+    const averagePlate = () =>
+      page5.evaluate(`
+        (function () {
+          var el = document.querySelector('canvas.lower-canvas');
+          var d = el.getContext('2d').getImageData(0, 0, el.width, el.height).data;
+          var r = 0, g = 0, b = 0, n = 0;
+          for (var i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; n++; }
+          return [Math.round(r / n), Math.round(g / n), Math.round(b / n)];
+        })()
+      `) as Promise<number[]>
+    const blackPlate = await averagePlate()
+    check('le fond noir s’affiche à l’écran', blackPlate.every((c) => c < 6), `-> ${JSON.stringify(blackPlate)}`)
+
+    // Same file input, second image: the plate must be rebuilt, not stacked.
+    await uploadFrame(page5, [fixtures.frameDetail])
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    const photoPlate = await averagePlate()
+    check(
+      'remplacer l’image de fond remplace bien la précédente à l’écran',
+      !photoPlate.every((c) => c < 6),
+      `-> ${JSON.stringify(photoPlate)} (l’ancien noir resterait sinon)`,
+    )
+    check(
+      'le nom du nouveau fond est affiché',
+      /fond-detaille/.test(await page5.evaluate('document.body.innerText')),
+    )
+    // And back to a flat colour, to close the loop.
+    await page5.evaluate(snippetClickText(['Couleur']))
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    await page5.evaluate(snippetClickLabel('Marine'))
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    const marinePlate = await averagePlate()
+    check(
+      'passer en couleur après une image remplace aussi le fond à l’écran',
+      Math.abs(marinePlate[0] - 0x0f) <= 3 && Math.abs(marinePlate[2] - 0x2a) <= 3,
+      `-> ${JSON.stringify(marinePlate)} (attendu #0f172a)`,
+    )
+    await page5.close()
+
+    /* ---------------------------------------------------------------- */
+    console.log('\n[23] Aucune erreur JavaScript')
     const relevant = consoleErrors.filter((e) => !/favicon|404|Failed to load resource/i.test(e))
     check('aucune erreur console', relevant.length === 0, `-> ${relevant.slice(0, 5).join(' | ')}`)
 

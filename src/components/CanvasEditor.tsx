@@ -247,15 +247,29 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
   /*                                Guides                              */
   /* ------------------------------------------------------------------ */
 
+  /**
+   * Detaches a scene object from the canvas, then frees it.
+   *
+   * `dispose()` on its own is NOT enough: the object stays in the canvas object
+   * list and is still drawn. A rebuilt plate or guide would therefore be painted
+   * *under* its own replacement — which is why changing the background colour
+   * had no visible effect while the exported file was correct.
+   */
+  const dropObject = (object: fabric.FabricObject | null | undefined, target: fabric.Canvas | null = canvasRef.current) => {
+    if (!object) return
+    target?.remove(object)
+    object.dispose()
+  }
+
   const buildGuides = useCallback(() => {
     const canvas = canvasRef.current
     const currentFrame = frameRef.current
     if (!canvas || !currentFrame) return
     const { width, height } = currentFrame
 
-    guidesRef.current.v?.dispose()
-    guidesRef.current.h?.dispose()
-    guidesRef.current.grid?.dispose()
+    dropObject(guidesRef.current.v)
+    dropObject(guidesRef.current.h)
+    dropObject(guidesRef.current.grid)
     guidesRef.current = {}
 
     if (showGridRef.current) {
@@ -389,7 +403,7 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
   const buildBackground = useCallback(async (plate: Background) => {
     const canvas = canvasRef.current
     if (!canvas) return
-    backgroundRef.current?.dispose()
+    dropObject(backgroundRef.current)
     backgroundRef.current = null
 
     const shared = {
@@ -672,13 +686,13 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
       const guides = guidesRef.current
       const objects = objectsRef.current
       const background = backgroundRef.current
-      guides.v?.dispose()
-      guides.h?.dispose()
-      guides.grid?.dispose()
+      dropObject(guides.v, canvas)
+      dropObject(guides.h, canvas)
+      dropObject(guides.grid, canvas)
       guidesRef.current = {}
-      background?.dispose()
+      dropObject(background, canvas)
       backgroundRef.current = null
-      objects.forEach((obj) => obj.dispose())
+      objects.forEach((obj) => dropObject(obj, canvas))
       objects.clear()
       void canvas.dispose()
       canvasRef.current = null
