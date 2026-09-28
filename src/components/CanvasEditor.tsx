@@ -44,8 +44,6 @@ export interface EditorApi {
   applySnapshot: (snapshot: EditorSnapshot) => void
   captureSnapshot: (spacing: number) => EditorSnapshot
   fitToScreen: () => void
-  setZoom: (zoom: number) => void
-  getZoom: () => number
   getFrame: () => FrameSize
   getBoxes: () => Box[]
   isReady: () => boolean
@@ -116,9 +114,7 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
   const snapRef = useRef(snapEnabled)
   const activeIdRef = useRef(activeId)
   const zoomRef = useRef(1)
-  const fitZoomRef = useRef(1)
   const syncingFromReact = useRef(false)
-  const gestureRef = useRef<{ distance: number; zoom: number } | null>(null)
 
   // Latest callbacks, kept in refs so that the fabric listeners (registered
   // once) always call the current version without being re-registered.
@@ -352,9 +348,14 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
   }, [])
 
   /* ------------------------------------------------------------------ */
-  /*                                Zoom                                */
+  /*                          Fit to the viewport                        */
   /* ------------------------------------------------------------------ */
 
+  /**
+   * The only zoom that exists: whatever makes the whole plate visible. There is
+   * no wheel, no pinch and no zoom button, so this is always the fit factor and
+   * `next` comes from `computeFitZoom` alone.
+   */
   const applyZoom = useCallback((next: number) => {
     const canvas = canvasRef.current
     const currentFrame = frameRef.current
@@ -379,9 +380,7 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
   }, [])
 
   const fitToScreen = useCallback(() => {
-    const zoom = computeFitZoom()
-    fitZoomRef.current = zoom
-    applyZoom(zoom)
+    applyZoom(computeFitZoom())
   }, [applyZoom, computeFitZoom])
 
   /* ------------------------------------------------------------------ */
@@ -626,24 +625,6 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
       handlers.current.onCommit('move', previous)
     }
 
-    const handleMouseWheel = (opt: fabric.TPointerEventInfo<WheelEvent>) => {
-      const event = opt.e
-      event.preventDefault()
-      event.stopPropagation()
-      const delta = event.deltaY
-      const factor = 0.999 ** delta
-      const next = clamp(zoomRef.current * factor, MIN_ZOOM, MAX_ZOOM)
-      const zoom = canvas.getZoom()
-      if (zoom === next) return
-      canvas.zoomToPoint(new fabric.Point(event.offsetX, event.offsetY), next)
-      zoomRef.current = next
-      canvas.setDimensions({
-        width: (frameRef.current?.width ?? canvas.getWidth() / zoom) * next,
-        height: (frameRef.current?.height ?? canvas.getHeight() / zoom) * next,
-      })
-      canvas.requestRenderAll()
-    }
-
     canvas.on('selection:created', handleSelection)
     canvas.on('selection:updated', handleSelection)
     canvas.on('selection:cleared', handleSelection)
@@ -671,7 +652,6 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
     canvas.on('object:moving', handleObjectMoving)
     canvas.on('object:scaling', handleScaling)
     canvas.on('object:modified', handleModified)
-    canvas.on('mouse:wheel', handleMouseWheel)
 
     return () => {
       canvas.off()
@@ -776,64 +756,15 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
     }
   }, [activeId, geometrySignature])
 
-  // Keep the "fit" zoom in sync with the container size.
+  // The plate always fills the available space: the zoom is whatever fits, so
+  // a resize simply re-fits. There is no user-controlled zoom any more.
   useEffect(() => {
     const shell = shellRef.current
     if (!shell || typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(() => {
-      const currentFrame = frameRef.current
-      if (!currentFrame) return
-      const zoom = computeFitZoom()
-      fitZoomRef.current = zoom
-      // Only re-fit automatically while the user is at the previous fit zoom.
-      if (Math.abs(zoomRef.current - fitZoomRef.current) < 0.001 || Math.abs(zoomRef.current - 1) < 0.001) {
-        applyZoom(zoom)
-      }
-    })
+    const observer = new ResizeObserver(() => applyZoom(computeFitZoom()))
     observer.observe(shell)
     return () => observer.disconnect()
   }, [applyZoom, computeFitZoom])
-
-  // Pinch to zoom on touch devices.
-  useEffect(() => {
-    const shell = shellRef.current
-    if (!shell) return
-
-    const getDistance = (touches: TouchList) => {
-      const [a, b] = [touches[0], touches[1]]
-      return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
-    }
-
-    const onTouchStart = (event: TouchEvent) => {
-      if (event.touches.length !== 2) return
-      gestureRef.current = { distance: getDistance(event.touches), zoom: zoomRef.current }
-    }
-
-    const onTouchMove = (event: TouchEvent) => {
-      const gesture = gestureRef.current
-      if (!gesture || event.touches.length !== 2) return
-      event.preventDefault()
-      const distance = getDistance(event.touches)
-      const next = clamp((gesture.zoom * distance) / gesture.distance, MIN_ZOOM, MAX_ZOOM)
-      if (Math.abs(next - zoomRef.current) < 0.0005) return
-      applyZoom(next)
-    }
-
-    const onTouchEnd = () => {
-      gestureRef.current = null
-    }
-
-    shell.addEventListener('touchstart', onTouchStart, { passive: true })
-    shell.addEventListener('touchmove', onTouchMove, { passive: false })
-    shell.addEventListener('touchend', onTouchEnd)
-    shell.addEventListener('touchcancel', onTouchEnd)
-    return () => {
-      shell.removeEventListener('touchstart', onTouchStart)
-      shell.removeEventListener('touchmove', onTouchMove)
-      shell.removeEventListener('touchend', onTouchEnd)
-      shell.removeEventListener('touchcancel', onTouchEnd)
-    }
-  }, [applyZoom])
 
   /* ------------------------------------------------------------------ */
   /*                          Imperative API                            */
@@ -981,13 +912,11 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
         }),
       }),
       fitToScreen,
-      setZoom: (zoom: number) => applyZoom(zoom),
-      getZoom: () => zoomRef.current,
       getFrame: () => frameRef.current ?? { width: 0, height: 0 },
       getBoxes: () => readBoxes(),
       isReady: () => canvasRef.current !== null,
     }),
-    [applyBoxes, applyZoom, emitGroupStats, fitToScreen, getLogoObjects, logos, readBoxes, runLayout],
+    [applyBoxes, emitGroupStats, fitToScreen, getLogoObjects, logos, readBoxes, runLayout],
   )
 
   return (

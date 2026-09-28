@@ -17,9 +17,11 @@ Tout se passe **dans le navigateur** : aucune donnée n’est envoyée sur un se
   `alignement vertical`.
 - Ajustements fins : bord gauche / droit / haut / bas, distribution horizontale, pas à pas de 1 px.
 - Déplacement et redimensionnement à la souris (ratio jamais déformé, redimensionnement autour
-  du centre), ajustement à l’écran d’un clic.
-- **Pas de boutons zoom / dézoom** : l’écran montre le fond entier, le bouton **Ajuster** remet la
-  vue en place. Le zoom à la molette et au pincement reste disponible pour inspecter un détail.
+  du centre).
+- **Aucun zoom, ni dézoom** : ni bouton, ni molette, ni pincement. Le fond est toujours affiché en
+  entier, à la taille qui tient dans la fenêtre, et la seule chose qui change l’échelle est le
+  redimensionnement de la fenêtre. Le fond affiché a toujours le même rapport que celui demandé,
+  donc un `2480 × 3508` se voit en portrait, entier, jamais rogné.
 - Aimant optionnel, grille, repères de centrage, annuler / rétablir.
 - Export **PNG ou JPG à la résolution d’origine**, sans interface, sans repères, sans grille.
 
@@ -30,8 +32,17 @@ Le fond n’est pas obligé d’être une photo. Au premier écran, on choisit e
 
 - **Image** : la photo, le cadre ou le fond de votre choix, à sa résolution d’origine.
 - **Couleur** : un sélecteur de couleur, 6 préréglages (noir, blanc, gris clair, gris, gris foncé,
-  marine) et un champ largeur × hauteur en pixels, plus 5 formats courants (16:9, 1:1, A4 portrait et
-  paysage). Le préréglage noir est proposé dès l’accueil, c’est le cas le plus courant.
+  marine) et un champ largeur × hauteur en pixels, plus 5 formats courants :
+
+  | Format | Définition |
+  | --- | --- |
+  | 16:9 | 1920 × 1080 |
+  | 1:1 | 1080 × 1080 |
+  | 1:1 | 2048 × 2048 |
+  | A4 portrait | 2480 × 3508 |
+  | A4 paysage | 3508 × 2480 |
+
+  Le préréglage noir est proposé dès l’accueil, c’est le cas le plus courant.
 
 Le fond uni n’est pas un simple aplat d’aperçu : à l’export, le canvas est **rempli** avec la couleur
 sur toute la surface, donc un fond agrandi reste parfaitement net. Comme pour une image, la taille
@@ -143,6 +154,7 @@ Node**, sans navigateur : c’est la seule vérification que l’application ne 
 | fond uni **noir 1920 × 1080** | 790 px | **1920 × 1080** | — | coins (0, 0, 0) |
 | fond uni **gris #9ca3af** | 790 px | **1920 × 1080** | — | coins (156, 163, 175) |
 | fond uni **gris 1080 × 1080** | 790 px | **1080 × 1080** | — | groupe centré 540 / 540 |
+| fond uni **A4 portrait 2480 × 3508** | 790 px | **2480 × 3508** | — | annoncé et fichier conformes |
 
 Le test de netteté est **calibré** : en forçant une miniature à 40 % à l’import, le logo à rayures
 perd toutes ses transitions (198 → 0) et la rampe passe de 1 px à 206 px. La mesure est donc
@@ -159,7 +171,7 @@ Changer la couleur ne changeait **rien à l’écran** : le fichier exporté ét
 couleur, mais le canvas affichait encore l’ancienne. La cause : `dispose()` sur un objet Fabric le
 libère sans le détacher du canvas. L’ancien rectangle restait donc peint **par-dessus** son
 remplacement (l’objet est envoyé à l’arrière-plan, ce qui fait remonter l’ancien au premier plan), et
-un redraw forcé — zoom, redimensionnement de fenêtre — ne le retirait pas.
+un redraw forcé — par exemple un redimensionnement de fenêtre — ne le retirait pas.
 
 Le correctif est un `dropObject()` qui fait `canvas.remove(obj)` **puis** `obj.dispose()`, utilisé
 pour le fond, la grille et les repères de centre. Les logos, eux, faisaient déjà l’opération dans
@@ -208,12 +220,12 @@ régression (`2 TESTS EN ECHEC`), puis avec le nouveau code.
 src/
   App.tsx                  état global, historique, raccourcis, export, mise en page
   components/
-    CanvasEditor.tsx       canvas Fabric, objets, zoom, repères, aimant, échelle
+    CanvasEditor.tsx       canvas Fabric, objets, repères, aimant, échelle
     BackgroundPanel.tsx    onglet Image / Couleur, couleur, dimensions du fond
     ImageUploader.tsx      import de l’image principale
     LogoUploader.tsx       ajout / liste / miniatures / ordre des logos
     LogoControls.tsx       modes, espacement, tailles, ajustements
-    Toolbar.tsx            centrage, distribution, annuler, repères, ajuster à l’écran
+    Toolbar.tsx            centrage, distribution, annuler, repères, grille
     ExportButton.tsx       export PNG / JPG, taille de sortie
     ToastStack.tsx         messages utilisateur
   utils/

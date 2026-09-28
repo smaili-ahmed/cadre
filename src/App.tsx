@@ -999,7 +999,7 @@ function Intro({
 
         <p className="mt-6 flex items-center justify-center gap-2 text-xs text-ink-400">
           <MousePointerClick size={14} />
-          Astuce : molette pour zoomer, glisser-déposer pour déplacer, poignée pour redimensionner.
+                  Astuce : glisser-déposer pour déplacer, poignée pour redimensionner.
         </p>
       </div>
     </div>

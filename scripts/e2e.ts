@@ -1594,7 +1594,104 @@ async function main() {
     await page5.close()
 
     /* ---------------------------------------------------------------- */
-    console.log('\n[23] Aucune erreur JavaScript')
+    console.log('\n[23] Les 5 formats de fond, et aucun zoom possible')
+    // The five presets must be honoured exactly, on screen and in the file.
+    // Zoom is gone: no wheel, no pinch, no button, so the plate always shows
+    // whole and the exported file is the size that was chosen.
+    const page6 = await browser.newPage()
+    await page6.setViewport({ width: 1600, height: 1000, deviceScaleFactor: 1 })
+    await page6.goto(URL, { waitUntil: 'networkidle0' })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    await page6.evaluate(snippetClickText(['Partir d’un fond noir']))
+    await page6.waitForSelector('canvas.upper-canvas', { timeout: 20000 })
+    await new Promise((resolve) => setTimeout(resolve, 800))
+    // The export button stays disabled without a logo, so add one.
+    await uploadLogos(page6, [fixtures.alfia])
+    await page6.waitForFunction('/alfia/i.test(document.body.innerText)', { timeout: 20000 })
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    const PRESETS: [string, number, number][] = [
+      ['1920 × 1080 — 16:9', 1920, 1080],
+      ['1080 × 1080 — 1:1', 1080, 1080],
+      ['2048 × 2048 — 1:1', 2048, 2048],
+      ['2480 × 3508 — A4 portrait', 2480, 3508],
+      ['3508 × 2480 — A4 paysage', 3508, 2480],
+    ]
+    const screenBox = () =>
+      page6.evaluate(`
+        (function () {
+          var el = document.querySelector('canvas.lower-canvas');
+          return el ? [el.width, el.height] : null;
+        })()
+      `) as Promise<number[] | null>
+    for (const [label, width, height] of PRESETS) {
+      const picked = await page6.evaluate(snippetClickText([label], true))
+      await new Promise((resolve) => setTimeout(resolve, 700))
+      const box = await screenBox()
+      // The panel and the status bar must state the chosen size.
+      const shown = (await page6.evaluate('document.body.innerText')).includes(`→ ${width} × ${height} px`)
+      const ratio = box ? box[0] / box[1] : 0
+      const shapeOk = Math.abs(ratio - width / height) < 0.02
+      const exported = (await exportOnce(page6, downloadDir)) as { savedTo?: string }
+      const disk = exported.savedTo ? readFileDimensions(exported.savedTo) : null
+      check(
+        `${label} : taille annoncée, forme à l’écran et fichier`,
+        picked !== null &&
+          shown &&
+          shapeOk &&
+          disk !== null &&
+          disk.width === width &&
+          disk.height === height,
+        `-> annoncé ${shown ? 'oui' : 'non'} · écran ${JSON.stringify(box)} · fichier ${disk ? `${disk.width}x${disk.height}` : 'non exporté'}`,
+      )
+    }
+    // Zoom attempts must all be ignored.
+    const beforeZoom = await screenBox()
+    for (let i = 0; i < 5; i++) {
+      await page6.mouse.move(700, 500)
+      await page6.mouse.wheel({ deltaY: -240 })
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    check(
+      'la molette ne zoome plus',
+      JSON.stringify(await screenBox()) === JSON.stringify(beforeZoom),
+      `-> ${JSON.stringify(beforeZoom)} avant, ${JSON.stringify(await screenBox())} après`,
+    )
+    await page6.evaluate(`
+      (function () {
+        var el = document.querySelector('canvas.upper-canvas');
+        function t(type, points) {
+          var list = points.map(function (p, i) {
+            return new Touch({ identifier: i, target: el, clientX: p[0], clientY: p[1] });
+          });
+          el.dispatchEvent(new TouchEvent(type, {
+            touches: list, targetTouches: list, changedTouches: list, bubbles: true, cancelable: true,
+          }));
+        }
+        t('touchstart', [[600, 400], [700, 500]]);
+        t('touchmove', [[400, 200], [900, 700]]);
+        t('touchend', []);
+        return true;
+      })()
+    `)
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    check(
+      'le pincement ne zoome plus',
+      JSON.stringify(await screenBox()) === JSON.stringify(beforeZoom),
+      `-> ${JSON.stringify(await screenBox())}`,
+    )
+    // A smaller window must still show the whole plate, never a crop.
+    await page6.setViewport({ width: 1100, height: 800, deviceScaleFactor: 1 })
+    await new Promise((resolve) => setTimeout(resolve, 800))
+    const shrunk = await screenBox()
+    check(
+      'le fond entier reste visible dans une fenêtre plus petite',
+      shrunk !== null && shrunk[0] <= 1100 && shrunk[1] <= 800,
+      `-> canvas ${JSON.stringify(shrunk)} pour un fond 3508 × 2480`,
+    )
+    await page6.close()
+
+    /* ---------------------------------------------------------------- */
+    console.log('\n[24] Aucune erreur JavaScript')
     const relevant = consoleErrors.filter((e) => !/favicon|404|Failed to load resource/i.test(e))
     check('aucune erreur console', relevant.length === 0, `-> ${relevant.slice(0, 5).join(' | ')}`)
 
