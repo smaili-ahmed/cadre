@@ -21,6 +21,24 @@ Tout se passe **dans le navigateur** : aucune donnée n’est envoyée sur un se
 - Aimant optionnel, grille, repères de centrage, annuler / rétablir.
 - Export **PNG ou JPG à la résolution d’origine**, sans interface, sans repères, sans grille.
 
+## Deux fonds possibles
+
+Le fond n’est pas obligé d’être une photo. Au premier écran, on choisit entre **une image** et
+**une couleur unie** :
+
+- **Image** : la photo, le cadre ou le fond de votre choix, à sa résolution d’origine.
+- **Couleur** : un sélecteur de couleur, 6 préréglages (noir, blanc, gris clair, gris, gris foncé,
+  marine) et un champ largeur × hauteur en pixels, plus 5 formats courants (16:9, 1:1, A4 portrait et
+  paysage). Le préréglage noir est proposé dès l’accueil, c’est le cas le plus courant.
+
+Le fond uni n’est pas un simple aplat d’aperçu : à l’export, le canvas est **rempli** avec la couleur
+sur toute la surface, donc un fond agrandi reste parfaitement net. Comme pour une image, la taille
+choisie est la taille du fichier exporté, et les logos sont centrés sur cette surface.
+
+Toute l’application fonctionne à l’identique dans les deux modes : mêmes centrage, mêmes
+redimensionnements, même export. Le mode se change à tout moment depuis le panneau **Fond**, sans
+perdre les logos importés.
+
 ## Démarrage
 
 ```bash
@@ -120,6 +138,9 @@ Node**, sans navigateur : c’est la seule vérification que l’application ne 
 | 2048 × 2048 en **DPR 2** | 1580 px | **2048 × 2048** | 646 / 584 px | — |
 | 2048 × 2048 en **×2** | 790 px | **4096 × 4096** | 1291 / 1169 px | — |
 | 2048 × 2048 en **largeur libre 1000** | 790 px | **1000 × 1000** | 620 / 561 px | — |
+| fond uni **noir 1920 × 1080** | 790 px | **1920 × 1080** | — | coins (0, 0, 0) |
+| fond uni **gris #9ca3af** | 790 px | **1920 × 1080** | — | coins (156, 163, 175) |
+| fond uni **gris 1080 × 1080** | 790 px | **1080 × 1080** | — | groupe centré 540 / 540 |
 
 Le test de netteté est **calibré** : en forçant une miniature à 40 % à l’import, le logo à rayures
 perd toutes ses transitions (198 → 0) et la rampe passe de 1 px à 206 px. La mesure est donc
@@ -134,6 +155,13 @@ zone des logos (`x 371..1554, y 427..651` sur 1920 × 1080) et le tramage 1 px d
 
 - **Coordonnées en pixels de l’image.** Le zoom Fabric ne modifie que le viewport ; la géométrie
   des logos reste en coordonnées image, ce qui rend l’export et les tests déterministes.
+- **Un seul type pour les deux fonds.** `Background` est une union discriminated
+  (`{ kind: 'image' }` ou `{ kind: 'color' }`) et `backgroundSize()` la ramène à une simple
+  `{ width, height }`. Tout le reste de l’application — centrage, ajustements, export, barre
+  d’état — ne connaît que cette taille, donc il n’y a pas deux chemins de code à maintenir.
+- Dans le canvas Fabric, le fond est un objet inerte envoyé à l’arrière-plan : une `FabricImage`
+  pour une image, un `fabric.Rect` rempli pour une couleur. Les logos se posent donc exactement de
+  la même façon dans les deux cas.
 - `strokeWidth: 0` sur les objets Fabric : la valeur par défaut `1` fausserait les dimensions.
 - **Export indépendant du canvas de prévisualisation.** Voir la section précédente : c’est la
   garantie centrale de la qualité d’export.
@@ -152,13 +180,15 @@ src/
   App.tsx                  état global, historique, raccourcis, export, mise en page
   components/
     CanvasEditor.tsx       canvas Fabric, objets, zoom, repères, aimant, échelle
+    BackgroundPanel.tsx    onglet Image / Couleur, couleur, dimensions du fond
     ImageUploader.tsx      import de l’image principale
     LogoUploader.tsx       ajout / liste / miniatures / ordre des logos
     LogoControls.tsx       modes, espacement, tailles, ajustements
     Toolbar.tsx            centrage, distribution, annuler, zoom, affichage
-    ExportButton.tsx       export PNG / JPG
+    ExportButton.tsx       export PNG / JPG, taille de sortie
     ToastStack.tsx         messages utilisateur
   utils/
+    background.ts          préréglages de couleur et de taille, normalisation
     centering.ts           maths du groupe : centre, alignement, distribution, échelle
     export.ts              rendu à résolution d’origine, blob, nom de fichier
     images.ts              validation, lecture, data URLs, dimensions SVG

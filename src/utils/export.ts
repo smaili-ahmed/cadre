@@ -1,11 +1,12 @@
 /**
- * Export at the original resolution.
+ * Export at the requested resolution.
  *
  * The export does NOT reuse the preview canvas and does NOT go through fabric:
- * a brand new canvas is allocated at exactly `originalWidth x originalHeight`
- * and the whole scene is rebuilt inside it from the ORIGINAL sources:
+ * a brand new canvas is allocated at exactly the output size and the whole
+ * scene is rebuilt inside it from the ORIGINAL sources:
  *
- *   1. the original main image, drawn 1:1;
+ *   1. the background: the original image drawn at the output size, or a solid
+ *      colour filling the canvas;
  *   2. each logo, drawn from its original bitmap (never a thumbnail) at the
  *      position and size it has in the editor.
  *
@@ -38,15 +39,14 @@ export const EXPORT_MIME: Record<ExportFormat, string> = {
 const MAX_CANVAS_SIDE = 16384
 const MAX_CANVAS_AREA = 268435456
 
-/** The original main image, with the dimensions captured at import time. */
-export interface ExportFrame {
-  /** Original data URL. The image never leaves the browser. */
-  url: string
-  /** `naturalWidth` of the original file, in pixels. */
-  width: number
-  /** `naturalHeight` of the original file, in pixels. */
-  height: number
-}
+/**
+ * The background of the export: either the original image, or a flat colour.
+ * Both carry the size of the plate, which is what the centring maths and the
+ * output size are based on.
+ */
+export type ExportBackground =
+  | { kind: 'image'; url: string; width: number; height: number }
+  | { kind: 'color'; color: string; width: number; height: number }
 
 /** One logo: its original source plus where it sits, in image coordinates. */
 export interface ExportLogo {
@@ -174,10 +174,10 @@ function canvasToBytes(
  * number or not larger than 0, in which case the export stays 1:1.
  */
 export function outputSizeFor(
-  frame: { width: number; height: number },
+  background: { width: number; height: number },
   requestedWidth?: number,
 ): { width: number; height: number; scale: number; upscaled: boolean } {
-  const source = { width: Math.max(1, frame.width), height: Math.max(1, frame.height) }
+  const source = { width: Math.max(1, background.width), height: Math.max(1, background.height) }
   const wanted =
     typeof requestedWidth === 'number' && Number.isFinite(requestedWidth) && requestedWidth > 0
       ? requestedWidth
@@ -205,7 +205,7 @@ export function timestampSuffix(): string {
  * can display exactly what was written to disk.
  */
 export async function renderComposition(options: {
-  frame: ExportFrame
+  background: ExportBackground
   logos: ExportLogo[]
   format: ExportFormat
   quality: number
@@ -213,8 +213,8 @@ export async function renderComposition(options: {
   requestedWidth?: number
   baseName?: string
 }): Promise<ExportResult> {
-  const { frame, logos, format, quality, requestedWidth, baseName } = options
-  const target = outputSizeFor(frame, requestedWidth)
+  const { background, logos, format, quality, requestedWidth, baseName } = options
+  const target = outputSizeFor(background, requestedWidth)
   assertCanvasSizeSupported(target.width, target.height)
 
   const exportCanvas = document.createElement('canvas')
@@ -227,22 +227,29 @@ export async function renderComposition(options: {
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
 
-  // JPEG has no alpha channel: the frame is flattened onto white, as in the
+  // JPEG has no alpha channel: the plate is flattened onto white, as in the
   // preview, so a logo on a transparent PNG does not turn black.
   if (format === 'jpeg') {
     ctx.fillStyle = '#ffffff'
     ctx.fillRect(0, 0, target.width, target.height)
   }
 
-  const frameImage = await loadImage(frame.url)
-  if (frameImage.naturalWidth !== frame.width || frameImage.naturalHeight !== frame.height) {
-    throw new Error(
-      `L’image source fait ${frameImage.naturalWidth} × ${frameImage.naturalHeight} px alors que ` +
-        `${frame.width} × ${frame.height} px ont été enregistrés à l’import.`,
-    )
+  if (background.kind === 'color') {
+    // A solid plate: one fill of the whole canvas, which stays perfectly sharp
+    // at any output size, so an upscaled export has no extra loss here.
+    ctx.fillStyle = background.color
+    ctx.fillRect(0, 0, target.width, target.height)
+  } else {
+    const frameImage = await loadImage(background.url)
+    if (frameImage.naturalWidth !== background.width || frameImage.naturalHeight !== background.height) {
+      throw new Error(
+        `L’image source fait ${frameImage.naturalWidth} × ${frameImage.naturalHeight} px alors que ` +
+          `${background.width} × ${background.height} px ont été enregistrés à l’import.`,
+      )
+    }
+    // The image fills the whole canvas, which is the requested size.
+    ctx.drawImage(frameImage, 0, 0, target.width, target.height)
   }
-  // The frame fills the whole canvas, which is the requested size.
-  ctx.drawImage(frameImage, 0, 0, target.width, target.height)
 
   // Logos live in image coordinates, so they are multiplied by the same factor
   // as the frame. Below 1:1 (never the case by default) the factor would shrink

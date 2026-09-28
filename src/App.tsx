@@ -1,16 +1,18 @@
 import {
   Boxes,
   CheckCircle2,
-  FileImage,
   Image as ImageIcon,
   Lock,
   MousePointerClick,
+  Palette,
+  Ruler,
   Sparkles,
+  Upload,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CanvasEditor, { type CommitReason, type EditorApi } from './components/CanvasEditor'
+import { BackgroundPanel } from './components/BackgroundPanel'
 import ExportButton from './components/ExportButton'
-import ImageUploader from './components/ImageUploader'
 import LogoControls from './components/LogoControls'
 import { LogoList, LogoUploader } from './components/LogoUploader'
 import ToastStack, { type ToastKind, type ToastMessage } from './components/ToastStack'
@@ -24,9 +26,18 @@ import {
   detectOverflow,
   layoutGroup,
 } from './utils/centering'
+import {
+  DEFAULT_BACKGROUND_COLOR,
+  DEFAULT_BACKGROUND_SIZE,
+  backgroundSize,
+  colorBackground,
+  imageBackground,
+  normalizeColor,
+  withBackgroundSize,
+} from './utils/background'
 import { humanResolution, renderComposition, type ExportFormat, type ExportLogo, type ExportResult } from './utils/export'
 import { loadImageFile, validateFile } from './utils/images'
-import type { Box, CenterMode, EditorSnapshot, FrameSource, ImportedImage, LogoItem } from './utils/types'
+import type { Background, BackgroundKind, Box, CenterMode, EditorSnapshot, FrameSize, ImportedImage, LogoItem } from './utils/types'
 
 const HISTORY_LIMIT = 60
 
@@ -39,7 +50,8 @@ interface GroupStats {
 
 export default function App() {
   /* ------------------------------ state ------------------------------ */
-  const [frameImage, setFrameImage] = useState<ImportedImage | null>(null)
+  /** Null until the user picks either an image or a colour. */
+  const [background, setBackground] = useState<Background | null>(null)
   const [logos, setLogos] = useState<LogoItem[]>([])
   const [spacing, setSpacing] = useState(DEFAULT_SPACING)
   const [centerMode, setCenterMode] = useState<CenterMode>('both')
@@ -57,12 +69,12 @@ export default function App() {
 
   const editorRef = useRef<EditorApi | null>(null)
   const toastId = useRef(0)
-  // Mirrors the current frame for the async handlers, so they never close over a
-  // stale value. Written from an effect rather than during render.
-  const frameRef = useRef<ImportedImage | null>(null)
+  // Mirrors the current background for the async handlers, so they never close
+  // over a stale value. Written from an effect rather than during render.
+  const backgroundRef = useRef<Background | null>(null)
   useEffect(() => {
-    frameRef.current = frameImage
-  }, [frameImage])
+    backgroundRef.current = background
+  }, [background])
 
   /* ----------------------------- toasts ------------------------------ */
   const dismissToast = useCallback((id: number) => {
@@ -79,10 +91,13 @@ export default function App() {
   )
 
   /* ----------------------------- derived ----------------------------- */
-  const frame = useMemo<FrameSource | null>(
-    () => (frameImage ? { url: frameImage.url, width: frameImage.width, height: frameImage.height } : null),
-    [frameImage],
+  /** Metadata of the imported image, or null in colour mode. */
+  const frameImage = useMemo<ImportedImage | null>(
+    () => (background?.kind === 'image' ? background.image : null),
+    [background],
   )
+
+  const frame = useMemo<FrameSize | null>(() => backgroundSize(background), [background])
 
   const boxes = useMemo<Box[]>(
     () => logos.map((logo) => ({ id: logo.id, left: logo.left, top: logo.top, width: logo.width, height: logo.height })),
@@ -228,7 +243,7 @@ export default function App() {
     [spacing],
   )
 
-  /* ------------------------- import: main image ---------------------- */
+  /* ------------------------- background: image ------------------------ */
   const handleFrameFiles = useCallback(
     async (files: File[]) => {
       const file = files[0]
@@ -240,7 +255,7 @@ export default function App() {
       }
       try {
         const { image } = await loadImageFile(file)
-        setFrameImage(image)
+        setBackground(imageBackground(image))
         setLogos((current) => recomputeAutoScales(current, { width: image.width, height: image.height }))
         resetHistory()
         notify('success', `Image « ${image.name} » chargée (${humanResolution(image.width, image.height)}).`)
@@ -252,15 +267,36 @@ export default function App() {
     [notify, recomputeAutoScales, resetHistory],
   )
 
+  /* ------------------------- background: colour ----------------------- */
+  const startColorBackground = useCallback(() => {
+    setBackground(colorBackground(DEFAULT_BACKGROUND_COLOR))
+    resetHistory()
+  }, [resetHistory])
+
+  const handleBackgroundKind = useCallback((kind: BackgroundKind) => {
+    if (kind !== 'color') return
+    // Switching to a colour keeps the current size, so nothing jumps. Going back
+    // to an image is driven by the file picker itself.
+    setBackground((current) =>
+      current && current.kind !== 'color'
+        ? colorBackground(DEFAULT_BACKGROUND_COLOR, backgroundSize(current) ?? DEFAULT_BACKGROUND_SIZE)
+        : current,
+    )
+  }, [])
+
+  const handleBackgroundColor = useCallback((color: string) => {
+    setBackground((current) =>
+      current && current.kind === 'color' ? { ...current, color: normalizeColor(color, current.color) } : current,
+    )
+  }, [])
+
+  const handleBackgroundSize = useCallback((size: { width: number; height: number }) => {
+    setBackground((current) => (current ? withBackgroundSize(current, size) : current))
+  }, [])
+
   /* --------------------------- import: logos ------------------------- */
   const handleLogoFiles = useCallback(
     async (files: File[]) => {
-      const currentFrame = frameRef.current
-      if (!currentFrame) {
-        notify('error', 'Importez d’abord votre photo ou votre cadre.')
-        return
-      }
-
       const room = MAX_LOGOS - logos.length
       if (room <= 0) {
         notify('error', `Vous ne pouvez pas dépasser ${MAX_LOGOS} logos.`)
@@ -300,6 +336,8 @@ export default function App() {
 
       if (loaded.length === 0) return
 
+      const currentFrame = backgroundSize(backgroundRef.current) ?? DEFAULT_BACKGROUND_SIZE
+
       setLogos((current) => {
         const next = recomputeAutoScales([...current, ...loaded], currentFrame)
         // Place the new logos with the current mode as soon as they exist.
@@ -324,7 +362,7 @@ export default function App() {
 
   const removeLogo = useCallback(
     (id: string) => {
-      const currentFrame = frameRef.current
+      const currentFrame = backgroundSize(backgroundRef.current)
       if (logos.length > 1) pushHistory()
       setLogos((current) => {
         const next = current.filter((logo) => logo.id !== id)
@@ -367,7 +405,7 @@ export default function App() {
         next.splice(target, 0, moved)
         return next
       })
-      const currentFrame = frameRef.current
+      const currentFrame = backgroundSize(backgroundRef.current)
       if (currentFrame) {
         window.setTimeout(() => {
           const api = editorRef.current
@@ -392,7 +430,7 @@ export default function App() {
    */
   const resizeGroup = useCallback(
     (pctFor: (logo: LogoItem) => number) => {
-      const currentFrame = frameRef.current
+      const currentFrame = backgroundSize(backgroundRef.current)
       setLogos((current) => {
         if (current.length === 0) return current
         const resized = current.map((logo) => {
@@ -515,9 +553,9 @@ export default function App() {
       requestedWidth?: number,
     ): Promise<ExportResult | null> => {
       const api = editorRef.current
-      const frame = frameImage
-      if (!api || !frame) {
-        notify('error', 'Importez une image avant d’exporter.')
+      const plate = background
+      if (!api || !plate) {
+        notify('error', 'Choisissez d’abord une image ou une couleur de fond.')
         return null
       }
       if (logos.length === 0) {
@@ -547,12 +585,20 @@ export default function App() {
       }
       try {
         const result = await renderComposition({
-          frame: { url: frame.url, width: frame.width, height: frame.height },
+          background:
+            plate.kind === 'image'
+              ? {
+                  kind: 'image',
+                  url: plate.image.url,
+                  width: plate.image.width,
+                  height: plate.image.height,
+                }
+              : { kind: 'color', color: plate.color, width: plate.width, height: plate.height },
           logos: payload,
           format,
           quality,
           requestedWidth,
-          baseName: frame.name,
+          baseName: plate.kind === 'image' ? plate.image.name : `fond-${plate.color.slice(1)}`,
         })
         return result
       } catch (error) {
@@ -560,7 +606,7 @@ export default function App() {
         return null
       }
     },
-    [frameImage, logos, notify],
+    [background, logos, notify],
   )
 
   /* --------------------------- keyboard shortcuts -------------------- */
@@ -609,17 +655,19 @@ export default function App() {
       </header>
 
       <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-5 sm:px-6 sm:py-6">
-        {!frameImage ? (
-          <Intro onPick={handleFrameFiles} />
+        {!background ? (
+          <Intro onPickImage={handleFrameFiles} onPickColor={startColorBackground} />
         ) : (
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-[19rem_minmax(0,1fr)_20rem] xl:grid-cols-[21rem_minmax(0,1fr)_22rem]">
             {/* ------------------------- left column ------------------- */}
             <aside className="lc-animate-in flex flex-col gap-4">
-              <Panel title="Image principale">
-                <ImageUploader
-                  fileName={frameImage.name}
-                  resolution={humanResolution(frameImage.width, frameImage.height)}
-                  fileSize={frameImage.fileSize}
+              <Panel title="Fond">
+                <BackgroundPanel
+                  background={background}
+                  frameImage={frameImage}
+                  onKindChange={handleBackgroundKind}
+                  onColorChange={handleBackgroundColor}
+                  onSizeChange={handleBackgroundSize}
                   onFiles={handleFrameFiles}
                 />
               </Panel>
@@ -657,7 +705,7 @@ export default function App() {
                 canRedo={future.length > 0}
                 canDelete={!!activeId}
                 hasMultiple={logos.length > 1}
-                hasFrame={!!frameImage}
+                hasFrame={true}
                 hasLogos={logos.length > 0}
                 showGuides={showGuides}
                 showGrid={showGrid}
@@ -698,7 +746,7 @@ export default function App() {
               <div className="relative min-h-[22rem] flex-1 overflow-hidden rounded-2xl border border-ink-100 bg-white shadow-sm lg:min-h-[28rem]">
                 <CanvasEditor
                   ref={editorRef}
-                  frame={frame}
+                  background={background}
                   logos={logos}
                   spacing={spacing}
                   centerMode={centerMode}
@@ -712,7 +760,13 @@ export default function App() {
                   onZoomChange={setZoom}
                   onGroupStatsChange={setGroupStats}
                 />
-                <StatusBar frame={frame} stats={groupStats} logos={logos.length} overflow={overflow} />
+                <StatusBar
+                  frame={frame}
+                  stats={groupStats}
+                  logos={logos.length}
+                  overflow={overflow}
+                  backgroundColor={background.kind === 'color' ? background.color : null}
+                />
               </div>
             </section>
 
@@ -778,10 +832,12 @@ export default function App() {
                     </div>
                   )}
                   <ExportButton
-                    disabled={!frameImage || logos.length === 0}
+                    disabled={logos.length === 0}
                     format={exportFormat}
                     quality={exportQuality}
-                    frameSize={frame ? { width: frame.width, height: frame.height } : null}
+                    frameSize={frame}
+                    backgroundColor={background.kind === 'color' ? background.color : null}
+                    sourceLabel={background.kind === 'color' ? 'Fond uni' : 'Image d’origine'}
                     onBuild={handleExport}
                     onError={(message) => notify('error', message)}
                   />
@@ -823,11 +879,13 @@ function StatusBar({
   stats,
   logos,
   overflow,
+  backgroundColor,
 }: {
   frame: { width: number; height: number } | null
   stats: GroupStats | null
   logos: number
   overflow: boolean
+  backgroundColor: string | null
 }) {
   const centeredX = frame && stats ? Math.abs(stats.centerX - frame.width / 2) < 1 : false
   const centeredY = frame && stats ? Math.abs(stats.centerY - frame.height / 2) < 1 : false
@@ -835,9 +893,21 @@ function StatusBar({
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-white/10 bg-ink-900/80 px-3 py-1.5 text-[11px] font-medium text-ink-300 backdrop-blur-sm">
       <span className="flex items-center gap-1.5">
-        <FileImage size={12} />
+        <Ruler size={12} />
         {frame ? `${frame.width} × ${frame.height} px` : '—'}
       </span>
+      {backgroundColor && (
+        <>
+          <span className="text-ink-600">|</span>
+          <span className="flex items-center gap-1.5">
+            <span
+              className="inline-block h-2.5 w-2.5 rounded-sm ring-1 ring-white/40"
+              style={{ backgroundColor: backgroundColor }}
+            />
+            fond {backgroundColor}
+          </span>
+        </>
+      )}
       <span className="text-ink-600">|</span>
       <span>
         {logos} logo{logos > 1 ? 's' : ''}
@@ -854,7 +924,13 @@ function StatusBar({
   )
 }
 
-function Intro({ onPick }: { onPick: (files: File[]) => void }) {
+function Intro({
+  onPickImage,
+  onPickColor,
+}: {
+  onPickImage: (files: File[]) => void
+  onPickColor: () => void
+}) {
   const inputRef = useRef<HTMLInputElement | null>(null)
 
   return (
@@ -864,28 +940,57 @@ function Intro({ onPick }: { onPick: (files: File[]) => void }) {
           <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-xl shadow-indigo-500/30">
             <Sparkles size={26} />
           </div>
-          <h2 className="mt-4 text-xl font-bold text-ink-900 sm:text-2xl">Commencez par votre image</h2>
+          <h2 className="mt-4 text-xl font-bold text-ink-900 sm:text-2xl">Commencez par votre fond</h2>
           <p className="mx-auto mt-2 max-w-lg text-sm leading-relaxed text-ink-500">
-            Importez votre cadre ou votre photo, puis ajoutez 2 ou 3 logos. Le groupe sera placé automatiquement au
-            centre, parfaitement aligné et espacé.
+            Importez votre cadre ou votre photo — ou partez d’une simple couleur unie. Ajoutez ensuite 2 ou 3
+            logos : le groupe sera placé automatiquement au centre, parfaitement aligné et espacé.
           </p>
         </div>
 
-        <div className="mt-7">
-          <ImageUploader
-            fileName={null}
-            resolution={null}
-            fileSize={null}
-            onFiles={(files) => {
-              onPick(files)
-              if (inputRef.current) inputRef.current.value = ''
-            }}
-          />
+        <div className="mt-7 grid gap-3 sm:grid-cols-2">
+          <label className="group flex cursor-pointer flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-ink-200 px-5 py-8 text-center transition hover:border-indigo-400 hover:bg-indigo-50/40">
+            <span className="grid h-12 w-12 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-500/25 transition-transform group-hover:scale-105">
+              <ImageIcon size={22} />
+            </span>
+            <span className="text-sm font-semibold text-ink-800">Importer une image</span>
+            <span className="text-xs text-ink-500">Déposez votre photo, votre cadre ou votre fond</span>
+            <span className="mt-1 inline-flex items-center gap-2 rounded-xl bg-ink-900 px-4 py-2 text-xs font-semibold text-white">
+              <Upload size={15} />
+              Parcourir
+            </span>
+            <input
+              ref={inputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/jpg,image/webp"
+              className="sr-only"
+              onChange={(event) => {
+                const files = Array.from(event.target.files ?? [])
+                if (files.length > 0) onPickImage(files)
+                event.target.value = ''
+              }}
+            />
+          </label>
+
+          <button
+            type="button"
+            onClick={onPickColor}
+            className="group flex flex-col items-center gap-2 rounded-2xl border-2 border-ink-200 px-5 py-8 text-center transition hover:border-emerald-400 hover:bg-emerald-50/40"
+          >
+            <span className="grid h-12 w-12 place-items-center rounded-2xl bg-ink-900 text-white shadow-lg shadow-ink-900/20 transition-transform group-hover:scale-105">
+              <Palette size={22} />
+            </span>
+            <span className="text-sm font-semibold text-ink-800">Utiliser une couleur</span>
+            <span className="text-xs text-ink-500">Fond noir, blanc ou la couleur de votre choix</span>
+            <span className="mt-1 inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white">
+              <Palette size={15} />
+              Partir d’un fond noir
+            </span>
+          </button>
         </div>
 
         <ol className="mt-7 grid gap-3 sm:grid-cols-3">
           {[
-            { icon: ImageIcon, title: '1. Importez', text: 'Déposez votre photo, votre cadre ou un fond.' },
+            { icon: ImageIcon, title: '1. Choisissez', text: 'Une image, ou un fond uni de la taille voulue.' },
             { icon: Boxes, title: '2. Ajoutez', text: 'Jusqu’à 3 logos PNG, JPG, WEBP ou SVG.' },
             { icon: CheckCircle2, title: '3. Téléchargez', text: 'Centrez, ajustez, puis exportez en PNG ou JPG.' },
           ].map((step) => (

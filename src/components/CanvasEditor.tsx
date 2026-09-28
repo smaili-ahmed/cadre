@@ -18,7 +18,8 @@ import {
   layoutGroup,
   type Edge,
 } from '../utils/centering'
-import type { Box, CenterMode, EditorSnapshot, FrameSize, FrameSource, LogoItem } from '../utils/types'
+import { backgroundSize } from '../utils/background'
+import type { Background, Box, CenterMode, EditorSnapshot, FrameSize, LogoItem } from '../utils/types'
 
 const BACKGROUND_ID = 'frame-background'
 const GUIDE_GRID_ID = 'guide-grid'
@@ -53,7 +54,11 @@ export interface EditorApi {
 }
 
 export interface CanvasEditorProps {
-  frame: FrameSource | null
+  /**
+   * The plate behind the logos: an image or a flat colour. There is always one,
+   * so the canvas, the centring maths and the export share a single size.
+   */
+  background: Background
   logos: LogoItem[]
   spacing: number
   centerMode: CenterMode
@@ -82,7 +87,7 @@ function clamp(value: number, min: number, max: number): number {
 
 export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function CanvasEditor(props, ref) {
   const {
-    frame,
+    background,
     logos,
     spacing,
     centerMode,
@@ -100,7 +105,7 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
   const canvasElRef = useRef<HTMLCanvasElement | null>(null)
   const shellRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<fabric.Canvas | null>(null)
-  const frameRef = useRef<FrameSize | null>(frame)
+  const frameRef = useRef<FrameSize | null>(backgroundSize(background))
   const guidesRef = useRef<{ v?: fabric.Line; h?: fabric.Line; grid?: fabric.Group }>({})
   /** Centre of the logo being transformed, so a resize grows around itself. */
   const anchorRef = useRef<{ centerX: number; centerY: number } | null>(null)
@@ -131,7 +136,7 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
   showGridRef.current = showGrid
   snapRef.current = snapEnabled
   activeIdRef.current = activeId
-  frameRef.current = frame
+  frameRef.current = backgroundSize(background)
 
   /* ------------------------------------------------------------------ */
   /*                            Scene helpers                            */
@@ -374,19 +379,24 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
   /*                           Scene building                           */
   /* ------------------------------------------------------------------ */
 
-  const backgroundRef = useRef<fabric.FabricImage | null>(null)
+  const backgroundRef = useRef<fabric.FabricObject | null>(null)
 
-  const buildBackground = useCallback(async (frameImage: FrameSource) => {
+  /**
+   * Paints the plate: the imported image, or a rectangle filled with the chosen
+   * colour. Both are inert (not selectable, always at the back), so they behave
+   * identically for the logos layered on top.
+   */
+  const buildBackground = useCallback(async (plate: Background) => {
     const canvas = canvasRef.current
     if (!canvas) return
     backgroundRef.current?.dispose()
     backgroundRef.current = null
-    const image = await fabric.FabricImage.fromURL(frameImage.url, { crossOrigin: 'anonymous' })
-    image.set({
+
+    const shared = {
       left: 0,
       top: 0,
-      originX: 'left',
-      originY: 'top',
+      originX: 'left' as const,
+      originY: 'top' as const,
       selectable: false,
       evented: false,
       hoverCursor: 'default',
@@ -397,11 +407,26 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
       lockScalingY: true,
       lockRotation: true,
       objectCaching: false,
-    })
-    image.set({ id: BACKGROUND_ID })
-    canvas.add(image)
-    canvas.sendObjectToBack(image)
-    backgroundRef.current = image
+    }
+
+    let plate_: fabric.FabricObject
+    if (plate.kind === 'color') {
+      plate_ = new fabric.Rect({
+        ...shared,
+        width: plate.width,
+        height: plate.height,
+        fill: plate.color,
+      })
+    } else {
+      const image = await fabric.FabricImage.fromURL(plate.image.url, { crossOrigin: 'anonymous' })
+      image.set(shared)
+      plate_ = image
+    }
+
+    plate_.set({ id: BACKGROUND_ID })
+    canvas.add(plate_)
+    canvas.sendObjectToBack(plate_)
+    backgroundRef.current = plate_
   }, [])
 
   const createLogoObject = useCallback(async (logo: LogoItem, stackIndex: number) => {
@@ -665,15 +690,17 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
   /*                     React state -> fabric scene                    */
   /* ------------------------------------------------------------------ */
 
-  // Background image.
+  // Background plate: imported image, or solid colour.
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas || !frame) return
+    if (!canvas) return
     let cancelled = false
-    frameRef.current = frame
+    const size = backgroundSize(background)
+    if (!size) return
+    frameRef.current = size
 
     const setup = async () => {
-      await buildBackground(frame)
+      await buildBackground(background)
       if (cancelled) return
       buildGuides()
       fitToScreen()
@@ -684,7 +711,7 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frame?.url, frame?.width, frame?.height])
+  }, [background])
 
   // Logo list (add / remove / replace) — identity based, not geometry based.
   const logoSignature = logos.map((logo) => `${logo.id}:${logo.url}:${logo.naturalWidth}x${logo.naturalHeight}`).join('|')

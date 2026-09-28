@@ -12,8 +12,12 @@ export interface ExportButtonProps {
   disabled: boolean
   format: ExportFormat
   quality: number
-  /** Natural size of the imported image, or null before an import. */
+  /** Natural size of the imported image, or of the colour plate. */
   frameSize: { width: number; height: number } | null
+  /** Shown next to the size, e.g. "fond #000000". Null in image mode. */
+  backgroundColor?: string | null
+  /** Label of the source row: "Image d’origine" or "Fond". */
+  sourceLabel?: string
   onBuild: (
     format: ExportFormat,
     quality: number,
@@ -47,6 +51,8 @@ export function ExportButton({
   format,
   quality,
   frameSize,
+  backgroundColor = null,
+  sourceLabel = 'Image d’origine',
   onBuild,
   onError,
   onExported,
@@ -170,7 +176,14 @@ export function ExportButton({
       )}
 
       <div className="mt-2.5 space-y-1 rounded-xl border border-ink-200/70 bg-ink-50/60 px-3 py-2.5 text-[11px]">
-        <Row label="Image d’origine" value={frameSize ? humanResolution(frameSize.width, frameSize.height) : '—'} />
+        <Row
+          label={sourceLabel}
+          value={
+            frameSize
+              ? `${humanResolution(frameSize.width, frameSize.height)}${backgroundColor ? ` · ${backgroundColor}` : ''}`
+              : '—'
+          }
+        />
         <Row
           label="Résolution exportée"
           value={exported ? exported.label : target ? humanResolution(target.width, target.height) : '—'}

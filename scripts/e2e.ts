@@ -74,6 +74,23 @@ async function upload(page: Page, inputIndex: number, files: string[]) {
   await input.uploadFile(...files)
 }
 
+/**
+ * Uploads into the first file input that accepts SVG, which identifies the logo
+ * picker: the frame picker only accepts raster formats, and in colour mode there
+ * is no frame picker at all, so an index would depend on the background mode.
+ */
+async function uploadLogos(page: Page, files: string[]) {
+  const handles = await fileInputs(page)
+  for (const handle of handles) {
+    const accept = await handle.evaluate((el) => (el as HTMLInputElement).accept)
+    if (accept.includes('svg')) {
+      await handle.uploadFile(...files)
+      return
+    }
+  }
+  throw new Error('Input de logos (acceptant .svg) introuvable')
+}
+
 /** Click the first button whose label contains (or equals) one of the needles. */
 function snippetClickText(needles: string[], exact = false): string {
   return `
@@ -385,6 +402,91 @@ async function analyseLastExport(page: Page): Promise<PixelAnalysis> {
   return (await page.evaluate(ANALYSE_SNIPPET)) as PixelAnalysis
 }
 
+interface CornerAnalysis {
+  width: number
+  height: number
+  /** RGB of the 4 corners, clockwise from the top left. */
+  corners: [number, number, number][][]
+  /** RGB sampled 2 px from each edge, at the middle. */
+  edges: [number, number, number][]
+  /**
+   * Bounding box of the pixels that differ from the corner colour, i.e. the ink
+   * of the logos. Measured against the plate itself, so it works whatever the
+   * background colour is.
+   */
+  ink: { minX: number; maxX: number; minY: number; maxY: number } | null
+  centerX: number
+  centerY: number
+}
+
+/**
+ * Colour-oriented analysis: reads the corners to prove the plate is the colour
+ * that was chosen, and locates the logos by comparing every pixel to it, so the
+ * result does not depend on the background being black.
+ */
+const CORNER_SNIPPET = `
+(async function () {
+  var blob = window.__blob;
+  if (!blob) { throw new Error('Aucun fichier exporte'); }
+  var bitmap = await createImageBitmap(blob);
+  var canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  var ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0);
+  var img = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+  var data = img.data;
+  var width = bitmap.width, height = bitmap.height;
+
+  function at(x, y) {
+    var i = (y * width + x) * 4;
+    return [data[i], data[i + 1], data[i + 2]];
+  }
+
+  var corners = [
+    at(0, 0),
+    at(width - 1, 0),
+    at(0, height - 1),
+    at(width - 1, height - 1)
+  ];
+  var edges = [
+    at(Math.floor(width / 2), 0),
+    at(Math.floor(width / 2), height - 1),
+    at(0, Math.floor(height / 2)),
+    at(width - 1, Math.floor(height / 2))
+  ];
+
+  // The plate colour is the corner colour; anything else is ink.
+  var base = corners[0];
+  var minX = width, maxX = -1, minY = height, maxY = -1;
+  var step = Math.max(1, Math.floor(Math.min(width, height) / 700));
+  for (var y = 0; y < height; y += step) {
+    for (var x = 0; x < width; x += step) {
+      var d = Math.abs(at(x, y)[0] - base[0]) +
+              Math.abs(at(x, y)[1] - base[1]) +
+              Math.abs(at(x, y)[2] - base[2]);
+      if (d > 24) {
+        if (x < minX) { minX = x; }
+        if (x > maxX) { maxX = x; }
+        if (y < minY) { minY = y; }
+        if (y > maxY) { maxY = y; }
+      }
+    }
+  }
+
+  return {
+    width: width, height: height, corners: corners, edges: edges,
+    ink: maxX >= 0 ? { minX: minX, maxX: maxX, minY: minY, maxY: maxY } : null,
+    centerX: maxX >= 0 ? (minX + maxX) / 2 : -1,
+    centerY: maxX >= 0 ? (minY + maxY) / 2 : -1
+  };
+})()
+`
+
+async function analyseCorners(page: Page): Promise<CornerAnalysis> {
+  return (await page.evaluate(CORNER_SNIPPET)) as CornerAnalysis
+}
+
 /**
  * Triggers one export and returns both the in-browser analysis and the bytes
  * of the file that was really handed to the download, so they can be verified
@@ -393,7 +495,8 @@ async function analyseLastExport(page: Page): Promise<PixelAnalysis> {
 async function exportOnce(
   page: Page,
   downloadDir?: string,
-): Promise<PixelAnalysis & { savedTo?: string; savedName?: string }> {
+  analyse: (page: Page) => Promise<PixelAnalysis | CornerAnalysis> = analyseLastExport,
+): Promise<(PixelAnalysis | CornerAnalysis) & { savedTo?: string; savedName?: string }> {
   // The button stays in a transient state for a couple of seconds after each
   // export ("Génération…" then "Image téléchargée"), so wait for it to settle.
   await page.waitForFunction(
@@ -407,7 +510,7 @@ async function exportOnce(
   if (!clicked) throw new Error('Bouton « Télécharger en HD » introuvable')
   await page.waitForFunction('Boolean(window.__blob)', { timeout: 20000 })
   await new Promise((resolve) => setTimeout(resolve, 250))
-  const analysis = await analyseLastExport(page)
+  const analysis = await analyse(page)
 
   if (!downloadDir) return analysis
 
@@ -1231,7 +1334,118 @@ async function main() {
     await page3.close()
 
     /* ---------------------------------------------------------------- */
-    console.log('\n[21] Aucune erreur JavaScript')
+    console.log('\n[21] Fond uni : couleur, sans importer d’image')
+    // A flat plate is a legitimate background, so the whole flow must work with
+    // no image at all: pick a colour, add logos, export. The corners of the file
+    // are read back to prove the plate really is the chosen colour.
+    const page4 = await browser.newPage()
+    await page4.setViewport({ width: 1600, height: 1000, deviceScaleFactor: 1 })
+    await page4.goto(URL, { waitUntil: 'networkidle0' })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    check(
+      'l’accueil propose les deux points d’entrée : image ou couleur',
+      /Importer une image/.test(await page4.content()) && /Utiliser une couleur/.test(await page4.content()),
+    )
+    const noImageInputs = (await page4.$$('input[type=file]')).length
+    check('un seul choix de fichier est proposé à l’accueil', noImageInputs === 1)
+
+    const choseColor = await page4.evaluate(snippetClickText(['Partir d’un fond noir']))
+    check('le bouton « Partir d’un fond noir » démarre l’éditeur', choseColor !== null)
+    await page4.waitForSelector('canvas.upper-canvas', { timeout: 20000 })
+    await new Promise((resolve) => setTimeout(resolve, 800))
+    check(
+      'la taille par défaut du fond uni est affichée',
+      /1920/.test(await page4.content()) && /1080/.test(await page4.content()),
+    )
+
+    // Logos can be added without any image: the plate is the canvas.
+    await uploadLogos(page4, [fixtures.alfia, fixtures.nexgegl])
+    await page4.waitForFunction(
+      '/alfia/i.test(document.body.innerText) && /nexgegl/i.test(document.body.innerText)',
+      { timeout: 20000 },
+    )
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    await page4.evaluate(snippetClickText(['Tout centrer']))
+    await new Promise((resolve) => setTimeout(resolve, 700))
+
+    const black = (await exportOnce(page4, downloadDir, analyseCorners)) as CornerAnalysis & {
+      savedTo?: string
+    }
+    const blackDisk = black.savedTo ? readFileDimensions(black.savedTo) : null
+    check(
+      'le FICHIER fait 1920x1080 avec un fond noir',
+      blackDisk !== null && blackDisk.width === 1920 && blackDisk.height === 1080,
+      `-> ${blackDisk ? `${blackDisk.width}x${blackDisk.height}` : 'non enregistré'}`,
+    )
+    const isBlack = (c: number[]) => c[0] === 0 && c[1] === 0 && c[2] === 0
+    check(
+      'les 4 coins du fichier sont NOIRS (le fond est bien peint)',
+      black.corners.every(isBlack) && black.edges.every(isBlack),
+      `-> coins ${JSON.stringify(black.corners)} · bords ${JSON.stringify(black.edges)}`,
+    )
+    check(
+      'le groupe de logos est centré sur le fond uni',
+      black.ink !== null && near(black.centerX, 960, 2) && near(black.centerY, 540, 2),
+      `-> centre ${black.centerX} / ${black.centerY} (attendu 960 / 540)`,
+    )
+
+    // Change the colour: the file must follow, pixel for pixel.
+    const pickedGrey = await page4.evaluate(`
+      (function () {
+        var buttons = Array.prototype.slice.call(document.querySelectorAll('button'));
+        for (var i = 0; i < buttons.length; i++) {
+          if (buttons[i].getAttribute('aria-label') === 'Gris') { buttons[i].click(); return true; }
+        }
+        return false;
+      })()
+    `)
+    check('le préréglage « Gris » est cliquable', pickedGrey === true)
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const grey = (await exportOnce(page4, downloadDir, analyseCorners)) as CornerAnalysis & {
+      savedTo?: string
+    }
+    const greyDisk = grey.savedTo ? readFileDimensions(grey.savedTo) : null
+    const isGrey = (c: number[]) =>
+      Math.abs(c[0] - 0x9c) <= 2 && Math.abs(c[1] - 0xa3) <= 2 && Math.abs(c[2] - 0xaf) <= 2
+    check(
+      'les coins du fichier sont maintenant GRIS (#9ca3af)',
+      grey.corners.every(isGrey) && grey.edges.every(isGrey),
+      `-> coins ${JSON.stringify(grey.corners)}`,
+    )
+    check(
+      'le fond grisé ne change pas la taille du fichier',
+      greyDisk !== null && greyDisk.width === 1920 && greyDisk.height === 1080,
+      `-> ${greyDisk ? `${greyDisk.width}x${greyDisk.height}` : '?'}`,
+    )
+
+    // Change the plate size: the group must stay centred in the new format.
+    const resized = await page4.evaluate(snippetClickText(['1080 × 1080 — 1:1'], true))
+    check('le préréglage de taille 1080 × 1080 est cliquable', resized === '1080 × 1080 — 1:1')
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    await page4.evaluate(snippetClickText(['Tout centrer']))
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const square = (await exportOnce(page4, downloadDir, analyseCorners)) as CornerAnalysis & {
+      savedTo?: string
+    }
+    const squareDisk = square.savedTo ? readFileDimensions(square.savedTo) : null
+    check(
+      'le FICHIER suit la taille du fond : 1080x1080',
+      squareDisk !== null && squareDisk.width === 1080 && squareDisk.height === 1080,
+      `-> ${squareDisk ? `${squareDisk.width}x${squareDisk.height}` : 'non enregistré'}`,
+    )
+    check(
+      'le groupe reste centré sur le fond carré',
+      square.ink !== null && near(square.centerX, 540, 2) && near(square.centerY, 540, 2),
+      `-> centre ${square.centerX} / ${square.centerY} (attendu 540 / 540)`,
+    )
+    console.log(
+      `    -> noir ${JSON.stringify(black.corners[0])} · gris ${JSON.stringify(grey.corners[0])} · 1080x1080 centré à ${square.centerX} / ${square.centerY}`,
+    )
+    await page4.screenshot({ path: join(SHOTS, '09-fond-uni.png') as `${string}.png` })
+    await page4.close()
+
+    /* ---------------------------------------------------------------- */
+    console.log('\n[22] Aucune erreur JavaScript')
     const relevant = consoleErrors.filter((e) => !/favicon|404|Failed to load resource/i.test(e))
     check('aucune erreur console', relevant.length === 0, `-> ${relevant.slice(0, 5).join(' | ')}`)
 

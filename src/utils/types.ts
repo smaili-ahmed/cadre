@@ -9,6 +9,13 @@ export interface FrameSource extends FrameSize {
   url: string
 }
 
+/** What is painted behind the logos: a real image, or a flat colour. */
+export type Background =
+  | { kind: 'image'; image: ImportedImage }
+  | { kind: 'color'; color: string; width: number; height: number }
+
+export type BackgroundKind = Background['kind']
+
 export interface ImportedImage {
   id: string
   /** Original file name, used in the UI. */
