@@ -17,7 +17,9 @@ Tout se passe **dans le navigateur** : aucune donnée n’est envoyée sur un se
   `alignement vertical`.
 - Ajustements fins : bord gauche / droit / haut / bas, distribution horizontale, pas à pas de 1 px.
 - Déplacement et redimensionnement à la souris (ratio jamais déformé, redimensionnement autour
-  du centre), zoom à la molette et au pincement, ajustement à l’écran.
+  du centre), ajustement à l’écran d’un clic.
+- **Pas de boutons zoom / dézoom** : l’écran montre le fond entier, le bouton **Ajuster** remet la
+  vue en place. Le zoom à la molette et au pincement reste disponible pour inspecter un détail.
 - Aimant optionnel, grille, repères de centrage, annuler / rétablir.
 - Export **PNG ou JPG à la résolution d’origine**, sans interface, sans repères, sans grille.
 
@@ -211,7 +213,7 @@ src/
     ImageUploader.tsx      import de l’image principale
     LogoUploader.tsx       ajout / liste / miniatures / ordre des logos
     LogoControls.tsx       modes, espacement, tailles, ajustements
-    Toolbar.tsx            centrage, distribution, annuler, zoom, affichage
+    Toolbar.tsx            centrage, distribution, annuler, repères, ajuster à l’écran
     ExportButton.tsx       export PNG / JPG, taille de sortie
     ToastStack.tsx         messages utilisateur
   utils/

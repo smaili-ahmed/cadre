@@ -1484,6 +1484,20 @@ async function main() {
       guidesOff === 0,
       `-> ${guidesOff} px résiduels`,
     )
+    // Zoom / dézoom were removed from the toolbar: the plate is always shown
+    // whole, and "Ajuster" is the single way back to that view.
+    const toolbarLabels = (await page4.evaluate(`
+      (function () {
+        return Array.prototype.slice.call(document.querySelectorAll('button[aria-label]'))
+          .map(function (b) { return b.getAttribute('aria-label'); });
+      })()
+    `)) as string[]
+    check(
+      'aucun bouton zoom / dézoom dans la barre d’outils',
+      !toolbarLabels.includes('+') && !toolbarLabels.includes('−'),
+      `-> ${JSON.stringify(toolbarLabels.filter((l) => l === '+' || l === '−'))}`,
+    )
+    check('le bouton « Ajuster » reste disponible', toolbarLabels.includes('Ajuster'))
     const grey = (await exportOnce(page4, downloadDir, analyseCorners)) as CornerAnalysis & {
       savedTo?: string
     }

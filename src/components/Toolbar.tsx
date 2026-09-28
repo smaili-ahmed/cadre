@@ -12,8 +12,6 @@ import {
   ScanLine,
   Trash2,
   Undo2,
-  ZoomIn,
-  ZoomOut,
 } from 'lucide-react'
 import type { ComponentType } from 'react'
 
@@ -27,7 +25,6 @@ export interface ToolbarProps {
   showGuides: boolean
   showGrid: boolean
   snapEnabled: boolean
-  zoom: number
   onCenterAll: () => void
   onCenterH: () => void
   onCenterV: () => void
@@ -37,8 +34,6 @@ export interface ToolbarProps {
   onUndo: () => void
   onRedo: () => void
   onDelete: () => void
-  onZoomIn: () => void
-  onZoomOut: () => void
   onFit: () => void
   onToggleGuides: () => void
   onToggleGrid: () => void
@@ -89,7 +84,6 @@ export function Toolbar(props: ToolbarProps) {
     showGuides,
     showGrid,
     snapEnabled,
-    zoom,
   } = props
 
   const idle = !hasFrame || !hasLogos
@@ -180,11 +174,6 @@ export function Toolbar(props: ToolbarProps) {
       <span className="mx-1 hidden h-6 w-px bg-ink-100 sm:block" />
 
       <div className="ml-auto flex items-center gap-1.5">
-        <ToolButton label="−" hint="dézoomer" icon={ZoomOut} onClick={props.onZoomOut} disabled={!hasFrame} />
-        <span className="min-w-[3.25rem] text-center text-xs font-semibold tabular-nums text-ink-600">
-          {Math.round(zoom * 100)}%
-        </span>
-        <ToolButton label="+" hint="zoomer" icon={ZoomIn} onClick={props.onZoomIn} disabled={!hasFrame} />
         <ToolButton label="Ajuster" hint="ajuste à l’écran" icon={Maximize} onClick={props.onFit} disabled={!hasFrame} />
       </div>
     </div>

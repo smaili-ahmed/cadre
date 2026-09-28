@@ -56,7 +56,6 @@ export default function App() {
   const [spacing, setSpacing] = useState(DEFAULT_SPACING)
   const [centerMode, setCenterMode] = useState<CenterMode>('both')
   const [activeId, setActiveId] = useState<string | null>(null)
-  const [zoom, setZoom] = useState(1)
   const [showGuides, setShowGuides] = useState(true)
   const [showGrid, setShowGrid] = useState(false)
   const [snapEnabled, setSnapEnabled] = useState(true)
@@ -710,7 +709,6 @@ export default function App() {
                 showGuides={showGuides}
                 showGrid={showGrid}
                 snapEnabled={snapEnabled}
-                zoom={zoom}
                 onCenterAll={centerNow}
                 onCenterH={() => {
                   pushHistory()
@@ -735,8 +733,6 @@ export default function App() {
                 onUndo={undo}
                 onRedo={redo}
                 onDelete={() => activeId && removeLogo(activeId)}
-                onZoomIn={() => editorRef.current?.zoomIn()}
-                onZoomOut={() => editorRef.current?.zoomOut()}
                 onFit={() => editorRef.current?.fitToScreen()}
                 onToggleGuides={() => setShowGuides((value) => !value)}
                 onToggleGrid={() => setShowGrid((value) => !value)}
@@ -757,7 +753,6 @@ export default function App() {
                   onSelect={setActiveId}
                   onGeometryChange={handleGeometryChange}
                   onCommit={handleCommit}
-                  onZoomChange={setZoom}
                   onGroupStatsChange={setGroupStats}
                 />
                 <StatusBar

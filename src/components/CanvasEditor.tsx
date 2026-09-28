@@ -43,8 +43,6 @@ export interface EditorApi {
   sendBackward: () => void
   applySnapshot: (snapshot: EditorSnapshot) => void
   captureSnapshot: (spacing: number) => EditorSnapshot
-  zoomIn: () => void
-  zoomOut: () => void
   fitToScreen: () => void
   setZoom: (zoom: number) => void
   getZoom: () => number
@@ -70,7 +68,6 @@ export interface CanvasEditorProps {
   onSelect: (id: string | null) => void
   onGeometryChange: (id: string, patch: Partial<Pick<Box, 'left' | 'top' | 'width' | 'height'>>) => void
   onCommit: (reason: CommitReason, previous?: EditorSnapshot) => void
-  onZoomChange: (zoom: number) => void
   onGroupStatsChange: (stats: { centerX: number; centerY: number; width: number; height: number } | null) => void
   onFitRequested?: () => void
 }
@@ -98,7 +95,6 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
     onSelect,
     onGeometryChange,
     onCommit,
-    onZoomChange,
     onGroupStatsChange,
   } = props
 
@@ -126,8 +122,8 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
 
   // Latest callbacks, kept in refs so that the fabric listeners (registered
   // once) always call the current version without being re-registered.
-  const handlers = useRef({ onSelect, onGeometryChange, onCommit, onZoomChange, onGroupStatsChange })
-  handlers.current = { onSelect, onGeometryChange, onCommit, onZoomChange, onGroupStatsChange }
+  const handlers = useRef({ onSelect, onGeometryChange, onCommit, onGroupStatsChange })
+  handlers.current = { onSelect, onGeometryChange, onCommit, onGroupStatsChange }
 
   spacingRef.current = spacing
   logosRef.current = logos
@@ -368,7 +364,6 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
     canvas.setDimensions({ width: currentFrame.width * zoom, height: currentFrame.height * zoom })
     canvas.requestRenderAll()
     zoomRef.current = zoom
-    handlers.current.onZoomChange(zoom)
   }, [])
 
   const computeFitZoom = useCallback((): number => {
@@ -647,7 +642,6 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
         height: (frameRef.current?.height ?? canvas.getHeight() / zoom) * next,
       })
       canvas.requestRenderAll()
-      handlers.current.onZoomChange(next)
     }
 
     canvas.on('selection:created', handleSelection)
@@ -986,8 +980,6 @@ export const CanvasEditor = forwardRef<EditorApi, CanvasEditorProps>(function Ca
           return { ...box, sizePct: logo?.sizePct ?? 100 }
         }),
       }),
-      zoomIn: () => applyZoom(zoomRef.current * 1.25),
-      zoomOut: () => applyZoom(zoomRef.current / 1.25),
       fitToScreen,
       setZoom: (zoom: number) => applyZoom(zoom),
       getZoom: () => zoomRef.current,
